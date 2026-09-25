@@ -1,0 +1,14 @@
+[Unit]
+Description=zucchini meta glasses connect loop
+After=bluetooth.service
+Wants=bluetooth.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/zucchini -config /etc/zucchini.json
+Restart=always
+RestartSec=2
+User=root
+
+[Install]
+WantedBy=multi-user.target
