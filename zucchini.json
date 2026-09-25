@@ -1,0 +1,15 @@
+{
+    "adapter": "hci0",
+    "grace_seconds": 15,
+    "workers": 4,
+    "call_timeout_ms": 5000,
+    "attempt_gap_ms": 20,
+    "signatures": [
+        {
+            "name": "meta-glasses",
+            "company_ids": ["0x0D53", "0x01AB", "0x058E"],
+            "service_uuids": ["0xFD5F"],
+            "name_patterns": ["Ray-Ban", "Oakley Meta", "Meta Glasses"]
+        }
+    ]
+}
