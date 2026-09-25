@@ -141,6 +141,6 @@ about the hardware, not a bug in this tool.
 Phase one: connection loop only. Audio playback is deliberately out of scope for
 now and may come later.
 
-## License
+## License and Copyright
 
-See repository license.
+`zucchini` is Copyright (c) 2026 Blaine Motsinger under the MIT license.
