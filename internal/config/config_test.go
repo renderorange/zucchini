@@ -1,8 +1,11 @@
 package config
 
 import (
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -62,8 +65,27 @@ func TestLoadRejectsBadJSON(t *testing.T) {
 
 func TestLoadRejectsTrailingData(t *testing.T) {
 	p := writeFile(t, `{"signatures":[{"name":"meta","company_ids":["0x0D53"]}]} {"workers": 999}`)
-	if _, err := Load(p); err == nil {
+	_, err := Load(p)
+	if err == nil {
 		t.Fatal("expected error for trailing data after top-level value")
+	}
+	if !strings.Contains(err.Error(), "trailing data after top-level value") {
+		t.Errorf("error %q should name the trailing-data problem", err)
+	}
+}
+
+func TestLoadTrailingDataSurfacesSyntaxError(t *testing.T) {
+	p := writeFile(t, `{"signatures":[{"name":"meta","company_ids":["0x0D53"]}]} garbage`)
+	_, err := Load(p)
+	if err == nil {
+		t.Fatal("expected error for trailing junk after top-level value")
+	}
+	if !strings.Contains(err.Error(), "trailing data after top-level value") {
+		t.Errorf("error %q should name the trailing-data problem", err)
+	}
+	var se *json.SyntaxError
+	if !errors.As(err, &se) {
+		t.Errorf("error %q should wrap the underlying json syntax error", err)
 	}
 }
 

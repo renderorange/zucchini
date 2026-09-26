@@ -42,7 +42,10 @@ func Load(path string) (*Config, error) {
 	}
 	var extra json.RawMessage
 	if err := dec.Decode(&extra); err != io.EOF {
-		return nil, fmt.Errorf("parse %s: trailing data after top-level value", path)
+		if err == nil {
+			return nil, fmt.Errorf("parse %s: trailing data after top-level value", path)
+		}
+		return nil, fmt.Errorf("parse %s: trailing data after top-level value: %w", path, err)
 	}
 	c.applyDefaults()
 	if err := c.validate(); err != nil {

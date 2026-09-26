@@ -211,7 +211,6 @@ func (r *Runner) reap() {
 	r.mu.Unlock()
 
 	for _, p := range stale {
-		r.logger.Printf("signature gone past grace window (%s), releasing", r.cfg.Grace())
 		r.forget(p)
 	}
 }

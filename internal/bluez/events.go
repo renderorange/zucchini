@@ -110,9 +110,10 @@ func parsePropertiesChanged(s *dbus.Signal) (dbus.ObjectPath, string, map[string
 	return s.Path, iface, changed, true
 }
 
-// devicePropsOfInterest are the Device1 properties that can change whether a
-// device matches a signature. Anything else (RSSI, TxPower, ...) is noise
-// and never justifies a full-property fetch.
+// devicePropsOfInterest are the Device1 properties worth a full-property
+// fetch: the fields that can change whether a device matches a signature,
+// plus Connected so the loop observes link drops. Anything else (RSSI,
+// TxPower, ...) is noise and never justifies a full-property fetch.
 var devicePropsOfInterest = map[string]bool{
 	"Address":          true,
 	"Name":             true,
