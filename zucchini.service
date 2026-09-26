@@ -2,13 +2,25 @@
 Description=zucchini meta glasses connect loop
 After=bluetooth.service
 Wants=bluetooth.service
+# The recovery story is restart-and-retry; a finite start rate would let a
+# downed bluetoothd take the service down with it.
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/zucchini -config /etc/zucchini.json
 Restart=always
 RestartSec=2
-User=root
+# Runs as root because bluez D-Bus policy varies by distro, but the process
+# needs none of root's power: empty capability bounding set plus full
+# filesystem and namespace hardening.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+MemoryDenyWriteExecute=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_BLUETOOTH AF_NETLINK
 
 [Install]
 WantedBy=multi-user.target
