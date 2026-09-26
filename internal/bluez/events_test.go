@@ -2,6 +2,7 @@ package bluez
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	"github.com/godbus/dbus/v5"
@@ -423,4 +424,18 @@ func TestTranslateNameOwnerChangedMalformed(t *testing.T) {
 	if _, ok := c.translate(context.Background(), sig); ok {
 		t.Fatal("malformed NameOwnerChanged must be ignored")
 	}
+}
+
+func TestEventMatchRulesIncludeAdapterPropertiesChanged(t *testing.T) {
+	want := []dbus.MatchOption{
+		dbus.WithMatchInterface(PropsIface),
+		dbus.WithMatchMember("PropertiesChanged"),
+		dbus.WithMatchArg(0, AdapterIface),
+	}
+	for _, rule := range eventMatchRules {
+		if slices.Equal(rule, want) {
+			return
+		}
+	}
+	t.Fatalf("Adapter1 PropertiesChanged rule missing from eventMatchRules")
 }

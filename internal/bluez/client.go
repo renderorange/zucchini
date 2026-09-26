@@ -138,6 +138,35 @@ func (c *Client) Devices() ([]DeviceSnapshot, error) {
 	return out, nil
 }
 
+// eventMatchRules are the bus-side signal match rules Events installs. They
+// are listed so cleanup can undo exactly the rules that were added, and so a
+// test can pin the set without a live bus.
+var eventMatchRules = [][]dbus.MatchOption{
+	{
+		dbus.WithMatchInterface(PropsIface),
+		dbus.WithMatchMember("PropertiesChanged"),
+		dbus.WithMatchArg(0, DeviceIface),
+	},
+	{
+		dbus.WithMatchInterface(PropsIface),
+		dbus.WithMatchMember("PropertiesChanged"),
+		dbus.WithMatchArg(0, AdapterIface),
+	},
+	{
+		dbus.WithMatchInterface(ObjectManagerIface),
+		dbus.WithMatchMember("InterfacesAdded"),
+	},
+	{
+		dbus.WithMatchInterface(ObjectManagerIface),
+		dbus.WithMatchMember("InterfacesRemoved"),
+	},
+	{
+		dbus.WithMatchInterface(DBusIface),
+		dbus.WithMatchMember("NameOwnerChanged"),
+		dbus.WithMatchArg(0, Service),
+	},
+}
+
 // Events streams added/changed/removed device events. The stop func releases
 // the subscription and closes the channel. ctx bounds the per-event device
 // property fetches done inside the translator.
@@ -145,36 +174,25 @@ func (c *Client) Events(ctx context.Context) (<-chan Event, func(), error) {
 	sig := make(chan *dbus.Signal, 256)
 	c.conn.Signal(sig)
 
+	var added [][]dbus.MatchOption
+	unmatch := func() {
+		for _, rule := range added {
+			_ = c.conn.RemoveMatchSignal(rule...)
+		}
+		added = nil
+	}
+
 	fail := func(err error) (<-chan Event, func(), error) {
+		unmatch()
 		c.conn.RemoveSignal(sig)
 		return nil, nil, err
 	}
 
-	if err := c.conn.AddMatchSignal(
-		dbus.WithMatchInterface(PropsIface),
-		dbus.WithMatchMember("PropertiesChanged"),
-		dbus.WithMatchArg(0, DeviceIface),
-	); err != nil {
-		return fail(err)
-	}
-	if err := c.conn.AddMatchSignal(
-		dbus.WithMatchInterface(ObjectManagerIface),
-		dbus.WithMatchMember("InterfacesAdded"),
-	); err != nil {
-		return fail(err)
-	}
-	if err := c.conn.AddMatchSignal(
-		dbus.WithMatchInterface(ObjectManagerIface),
-		dbus.WithMatchMember("InterfacesRemoved"),
-	); err != nil {
-		return fail(err)
-	}
-	if err := c.conn.AddMatchSignal(
-		dbus.WithMatchInterface(DBusIface),
-		dbus.WithMatchMember("NameOwnerChanged"),
-		dbus.WithMatchArg(0, Service),
-	); err != nil {
-		return fail(err)
+	for _, rule := range eventMatchRules {
+		if err := c.conn.AddMatchSignal(rule...); err != nil {
+			return fail(err)
+		}
+		added = append(added, rule)
 	}
 
 	out := make(chan Event, 256)
@@ -209,6 +227,7 @@ func (c *Client) Events(ctx context.Context) (<-chan Event, func(), error) {
 		default:
 			close(done)
 		}
+		unmatch()
 		c.conn.RemoveSignal(sig)
 	}
 	return out, stop, nil
