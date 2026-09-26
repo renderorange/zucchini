@@ -133,6 +133,17 @@ func propsOverlap(changed map[string]dbus.Variant) bool {
 	return false
 }
 
+// propBoolFalse reports whether the changed set carried a boolean property
+// with value false.
+func propBoolFalse(changed map[string]dbus.Variant, key string) bool {
+	v, ok := changed[key]
+	if !ok {
+		return false
+	}
+	b, ok := v.Value().(bool)
+	return ok && !b
+}
+
 func (c *Client) translate(ctx context.Context, s *dbus.Signal) (Event, bool) {
 	if s == nil {
 		return Event{}, false
@@ -144,21 +155,44 @@ func (c *Client) translate(ctx context.Context, s *dbus.Signal) (Event, bool) {
 		return parseInterfacesRemoved(s)
 	case PropsIface + ".PropertiesChanged":
 		path, iface, changed, ok := parsePropertiesChanged(s)
-		if !ok || iface != DeviceIface {
+		if !ok {
 			return Event{}, false
 		}
-		if !propsOverlap(changed) {
+		switch iface {
+		case DeviceIface:
+			if !propsOverlap(changed) {
+				return Event{}, false
+			}
+			// PropertiesChanged carries only the delta; fetch the full set so
+			// the matcher always sees complete ManufacturerData/ServiceData.
+			callCtx, cancel := context.WithTimeout(ctx, getDeviceTimeout)
+			snap, err := c.GetDevice(callCtx, path)
+			cancel()
+			if err != nil {
+				return Event{}, false
+			}
+			return Event{Type: EventChanged, Device: snap}, true
+		case AdapterIface:
+			// A false Powered or Discovering means our discovery session is
+			// gone; the loop re-arms it.
+			if propBoolFalse(changed, "Powered") || propBoolFalse(changed, "Discovering") {
+				return Event{Type: EventDiscoveryStopped}, true
+			}
+		}
+		return Event{}, false
+	case DBusIface + ".NameOwnerChanged":
+		if len(s.Body) < 3 {
 			return Event{}, false
 		}
-		// PropertiesChanged carries only the delta; fetch the full set so the
-		// matcher always sees complete ManufacturerData/ServiceData.
-		callCtx, cancel := context.WithTimeout(ctx, getDeviceTimeout)
-		snap, err := c.GetDevice(callCtx, path)
-		cancel()
-		if err != nil {
+		name, _ := s.Body[0].(string)
+		if name != Service {
 			return Event{}, false
 		}
-		return Event{Type: EventChanged, Device: snap}, true
+		newOwner, _ := s.Body[2].(string)
+		if newOwner != "" {
+			return Event{}, false
+		}
+		return Event{Type: EventBlueZGone}, true
 	}
 	return Event{}, false
 }

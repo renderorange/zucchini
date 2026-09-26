@@ -15,6 +15,7 @@ const (
 	DeviceIface        = "org.bluez.Device1"
 	PropsIface         = "org.freedesktop.DBus.Properties"
 	ObjectManagerIface = "org.freedesktop.DBus.ObjectManager"
+	DBusIface          = "org.freedesktop.DBus"
 )
 
 const (
@@ -45,6 +46,8 @@ const (
 	EventAdded EventType = iota
 	EventChanged
 	EventRemoved
+	EventBlueZGone
+	EventDiscoveryStopped
 )
 
 type Event struct {
@@ -163,6 +166,13 @@ func (c *Client) Events(ctx context.Context) (<-chan Event, func(), error) {
 	if err := c.conn.AddMatchSignal(
 		dbus.WithMatchInterface(ObjectManagerIface),
 		dbus.WithMatchMember("InterfacesRemoved"),
+	); err != nil {
+		return fail(err)
+	}
+	if err := c.conn.AddMatchSignal(
+		dbus.WithMatchInterface(DBusIface),
+		dbus.WithMatchMember("NameOwnerChanged"),
+		dbus.WithMatchArg(0, Service),
 	); err != nil {
 		return fail(err)
 	}

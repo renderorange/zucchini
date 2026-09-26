@@ -338,3 +338,89 @@ func TestSnapshotToleratesEmptyAndWrongTypes(t *testing.T) {
 		t.Error("maps should be initialized for nil props")
 	}
 }
+
+func TestTranslateNameOwnerChangedBlueZGone(t *testing.T) {
+	c := &Client{}
+	sig := &dbus.Signal{
+		Name: DBusIface + ".NameOwnerChanged",
+		Body: []interface{}{"org.bluez", ":1.5", ""},
+	}
+	ev, ok := c.translate(context.Background(), sig)
+	if !ok {
+		t.Fatal("expected ok=true for bluez owner vanishing")
+	}
+	if ev.Type != EventBlueZGone {
+		t.Fatalf("Type = %v, want EventBlueZGone", ev.Type)
+	}
+}
+
+func TestTranslateNameOwnerChangedIgnoresArrivals(t *testing.T) {
+	c := &Client{}
+	sig := &dbus.Signal{
+		Name: DBusIface + ".NameOwnerChanged",
+		Body: []interface{}{"org.bluez", "", ":1.9"},
+	}
+	if _, ok := c.translate(context.Background(), sig); ok {
+		t.Fatal("arriving bluez owner is not an event we act on")
+	}
+}
+
+func TestTranslateNameOwnerChangedIgnoresOtherServices(t *testing.T) {
+	c := &Client{}
+	sig := &dbus.Signal{
+		Name: DBusIface + ".NameOwnerChanged",
+		Body: []interface{}{"org.foo", ":1.5", ""},
+	}
+	if _, ok := c.translate(context.Background(), sig); ok {
+		t.Fatal("only org.bluez owner changes are relevant")
+	}
+}
+
+func TestTranslateAdapterPoweredOff(t *testing.T) {
+	c := &Client{}
+	sig := &dbus.Signal{
+		Name: PropsIface + ".PropertiesChanged",
+		Path: "/org/bluez/hci0",
+		Body: []interface{}{
+			"org.bluez.Adapter1",
+			map[string]dbus.Variant{
+				"Powered":     dbus.MakeVariant(false),
+				"Discovering": dbus.MakeVariant(false),
+			},
+			[]string{},
+		},
+	}
+	ev, ok := c.translate(context.Background(), sig)
+	if !ok || ev.Type != EventDiscoveryStopped {
+		t.Fatalf("ok=%v Type=%v, want ok=true Type=EventDiscoveryStopped", ok, ev.Type)
+	}
+}
+
+func TestTranslateAdapterIgnoresDiscoveryTrue(t *testing.T) {
+	c := &Client{}
+	sig := &dbus.Signal{
+		Name: PropsIface + ".PropertiesChanged",
+		Path: "/org/bluez/hci0",
+		Body: []interface{}{
+			"org.bluez.Adapter1",
+			map[string]dbus.Variant{
+				"Discoverable": dbus.MakeVariant(true),
+			},
+			[]string{},
+		},
+	}
+	if _, ok := c.translate(context.Background(), sig); ok {
+		t.Fatal("adapter changes that do not stop discovery are ignored")
+	}
+}
+
+func TestTranslateNameOwnerChangedMalformed(t *testing.T) {
+	c := &Client{}
+	sig := &dbus.Signal{
+		Name: DBusIface + ".NameOwnerChanged",
+		Body: []interface{}{"org.bluez"},
+	}
+	if _, ok := c.translate(context.Background(), sig); ok {
+		t.Fatal("malformed NameOwnerChanged must be ignored")
+	}
+}
