@@ -5,6 +5,7 @@ import (
 	"io"
 	"log"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -386,5 +387,21 @@ func TestSuccessfulConnectMarksConnectedAndIdles(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	if after := b.calls(); after != 2 {
 		t.Fatalf("connect calls = %d after success, want 2 stable", after)
+	}
+}
+
+func TestLogTickRateLimits(t *testing.T) {
+	r := newTestRunner(t, &fakeBackend{})
+	var a atomic.Int64
+
+	if !r.logTick(&a) {
+		t.Fatal("first call should pass the gate")
+	}
+	if r.logTick(&a) {
+		t.Fatal("immediate second call should be suppressed")
+	}
+	a.Store(time.Now().Add(-2 * time.Second).UnixNano())
+	if !r.logTick(&a) {
+		t.Fatal("call after the one-second window should pass")
 	}
 }

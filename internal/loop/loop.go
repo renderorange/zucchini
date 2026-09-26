@@ -35,6 +35,8 @@ type Runner struct {
 
 	discoveryDown   atomic.Bool
 	lastDiscoverLog atomic.Int64
+	lastAcquireLog  atomic.Int64
+	lastReleaseLog  atomic.Int64
 
 	mu      sync.Mutex
 	targets map[dbus.ObjectPath]*target
@@ -158,18 +160,24 @@ func (r *Runner) observe(ctx context.Context, d bluez.DeviceSnapshot) {
 			sigName: sigName,
 			cancel:  cancel,
 		}
+		t.lastSeen.Store(time.Now().UnixNano())
+		t.connected.Store(d.Connected)
 		r.targets[d.Path] = t
 		for i := 0; i < r.cfg.Workers; i++ {
 			t.wg.Add(1)
 			go r.hammer(tctx, t)
 		}
-		r.logger.Printf("target acquired: %s path=%s signature=%s workers=%d",
-			d.Address, d.Path, sigName, r.cfg.Workers)
+		if r.logTick(&r.lastAcquireLog) {
+			r.logger.Printf("target acquired: %s path=%s signature=%s workers=%d",
+				d.Address, d.Path, sigName, r.cfg.Workers)
+		}
 	}
 	r.mu.Unlock()
 
-	t.lastSeen.Store(time.Now().UnixNano())
-	t.connected.Store(d.Connected)
+	if exists {
+		t.lastSeen.Store(time.Now().UnixNano())
+		t.connected.Store(d.Connected)
+	}
 }
 
 func (r *Runner) forget(path dbus.ObjectPath) {
@@ -184,7 +192,9 @@ func (r *Runner) forget(path dbus.ObjectPath) {
 	}
 	t.cancel()
 	t.wg.Wait()
-	r.logger.Printf("target released: %s path=%s", t.address, path)
+	if r.logTick(&r.lastReleaseLog) {
+		r.logger.Printf("target released: %s path=%s", t.address, path)
+	}
 }
 
 // reap drops targets whose signature has been unseen longer than the grace window.
@@ -265,28 +275,30 @@ func (r *Runner) hammer(ctx context.Context, t *target) {
 	}
 }
 
+// logTick rate-limits one log category (failure, discovery-fail, acquire,
+// release) to a line per second, so a barrage of failures or randomized-MAC
+// adverts cannot fill the journal.
+func (r *Runner) logTick(last *atomic.Int64) bool {
+	now := time.Now().UnixNano()
+	prev := last.Load()
+	if now-prev < int64(time.Second) {
+		return false
+	}
+	return last.CompareAndSwap(prev, now)
+}
+
 // logFailure rate-limits per-target failure lines so a spam loop cannot fill the journal.
 func (r *Runner) logFailure(t *target, err error) {
-	now := time.Now().UnixNano()
-	last := t.lastFailLog.Load()
-	if now-last < int64(time.Second) {
-		return
-	}
-	if !t.lastFailLog.CompareAndSwap(last, now) {
+	if !r.logTick(&t.lastFailLog) {
 		return
 	}
 	r.logger.Printf("connect failed: %s (%s): %v", t.address, t.sigName, err)
 }
 
-// logDiscoveryFail rate-limits re-arm failure lines to one per second, same
-// pattern as logFailure, so a broken adapter cannot fill the journal.
+// logDiscoveryFail rate-limits re-arm failure lines to one per second, so a
+// broken adapter cannot fill the journal.
 func (r *Runner) logDiscoveryFail(err error) {
-	now := time.Now().UnixNano()
-	last := r.lastDiscoverLog.Load()
-	if now-last < int64(time.Second) {
-		return
-	}
-	if !r.lastDiscoverLog.CompareAndSwap(last, now) {
+	if !r.logTick(&r.lastDiscoverLog) {
 		return
 	}
 	r.logger.Printf("restart discovery: %v", err)
