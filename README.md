@@ -19,6 +19,9 @@ giving up. If the glasses are around, zucchini keeps trying until they answer.
 6. If the signature stops broadcasting for a grace period, zucchini stops
    hammering and goes back to scanning. When the glasses return, so does the
    hammering.
+7. If BlueZ itself dies, zucchini exits and systemd restarts it. If the
+   adapter loses its discovery session (power off, rfkill), zucchini re-arms
+   discovery automatically and keeps hammering.
 
 Multiple devices are handled at once. Each matched device gets its own set of
 workers.
@@ -62,13 +65,16 @@ add a row to `signatures` in the config. No rebuild needed.
 }
 ```
 
-| Setting | Default | Meaning |
-|---|---|---|
-| `adapter` | `hci0` | Which Bluetooth adapter to use |
-| `grace_seconds` | `15` | How long the signature can go unseen before zucchini stops hammering |
-| `workers` | `4` | Concurrent connection attempts per device |
-| `call_timeout_ms` | `5000` | How long one connection attempt may block before giving up |
-| `attempt_gap_ms` | `0` | Delay between attempts. Zero means no pause. This is not a backoff and it never grows. |
+| Setting | Default | Max | Meaning |
+|---|---|---|---|
+| `adapter` | `hci0` | - | Adapter basename, matched exactly and case-sensitively (e.g. `hci0`, not `HCI0` or `ci0`). Empty or omitted uses the default `hci0`. |
+| `grace_seconds` | `15` | `3600` | How long the signature can go unseen before zucchini stops hammering |
+| `workers` | `4` | `16` | Concurrent connection attempts per device |
+| `call_timeout_ms` | `5000` | `60000` | How long one connection attempt may block before giving up |
+| `attempt_gap_ms` | `0` | `60000` | Delay between attempts. Zero means no pause. This is not a backoff and it never grows. |
+
+Values above the max are refused at startup. Unknown keys are refused at
+startup — a typo like `grace_second` is a hard error, not a silent default.
 
 ## Build
 
@@ -108,6 +114,10 @@ ssh pi@your-pi 'journalctl -u zucchini -f'
 | `target acquired: ...` | A matching device was found and hammering began |
 | `connect failed: ...` | One attempt failed. Normal while hammering. |
 | `target released: ...` | Hammering stopped. Either the grace window expired or the device left. |
+| `discovery stopped on <adapter>, rediscovering` | The adapter lost its discovery session (e.g. powered off). zucchini retries every tick. |
+| `discovery restored on <adapter>` | Re-arming succeeded. Hammering continues. |
+| `run: org.bluez disappeared from the system bus` | bluetoothd died. zucchini exits so systemd restarts it. |
+| `restart discovery: ...` | A re-arm attempt failed (rate-limited to one line per second). |
 
 If you see `connect failed` repeating and never `target acquired` followed by a
 held connection, the glasses are refusing the Pi. See the risk note below.
