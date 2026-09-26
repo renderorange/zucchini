@@ -30,7 +30,7 @@ func (f *fakeBackend) StopDiscovery(dbus.ObjectPath) error  { return nil }
 
 func (f *fakeBackend) Devices() ([]bluez.DeviceSnapshot, error) { return nil, nil }
 
-func (f *fakeBackend) Events() (<-chan bluez.Event, func(), error) {
+func (f *fakeBackend) Events(ctx context.Context) (<-chan bluez.Event, func(), error) {
 	return make(chan bluez.Event), func() {}, nil
 }
 

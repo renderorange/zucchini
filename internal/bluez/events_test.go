@@ -1,6 +1,7 @@
 package bluez
 
 import (
+	"context"
 	"testing"
 
 	"github.com/godbus/dbus/v5"
@@ -233,18 +234,36 @@ func TestTranslateIgnoresPropertiesChangedForOtherInterfaces(t *testing.T) {
 			[]string{},
 		},
 	}
-	if _, ok := c.translate(sig); ok {
+	if _, ok := c.translate(context.Background(), sig); ok {
 		t.Fatal("translate should ignore non-Device1 PropertiesChanged")
 	}
 }
 
 func TestTranslateIgnoresUnknownSignalNames(t *testing.T) {
 	c := &Client{}
-	if _, ok := c.translate(&dbus.Signal{Name: "org.bluez.Adapter1.SomethingChanged"}); ok {
+	if _, ok := c.translate(context.Background(), &dbus.Signal{Name: "org.bluez.Adapter1.SomethingChanged"}); ok {
 		t.Fatal("translate should ignore unknown signals")
 	}
-	if _, ok := c.translate(nil); ok {
+	if _, ok := c.translate(context.Background(), nil); ok {
 		t.Fatal("translate should reject nil signal")
+	}
+}
+
+func TestTranslateSkipsIrrelevantPropertyChanges(t *testing.T) {
+	// RSSI churn must not trigger a device fetch. Safe without a live bus:
+	// the pre-filter returns before GetDevice is reached.
+	c := &Client{}
+	sig := &dbus.Signal{
+		Name: PropsIface + ".PropertiesChanged",
+		Path: "/org/bluez/hci0/dev_AA",
+		Body: []interface{}{
+			"org.bluez.Device1",
+			map[string]dbus.Variant{"RSSI": dbus.MakeVariant(int16(-42))},
+			[]string{},
+		},
+	}
+	if _, ok := c.translate(context.Background(), sig); ok {
+		t.Fatal("translate should skip property changes irrelevant to matching")
 	}
 }
 

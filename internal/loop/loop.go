@@ -22,7 +22,7 @@ type Backend interface {
 	StopDiscovery(adapter dbus.ObjectPath) error
 	Connect(ctx context.Context, path dbus.ObjectPath) error
 	Devices() ([]bluez.DeviceSnapshot, error)
-	Events() (<-chan bluez.Event, func(), error)
+	Events(ctx context.Context) (<-chan bluez.Event, func(), error)
 }
 
 type Runner struct {
@@ -69,7 +69,7 @@ func (r *Runner) Run(ctx context.Context, adapter dbus.ObjectPath) error {
 		}
 	}()
 
-	events, stop, err := r.client.Events()
+	events, stop, err := r.client.Events(ctx)
 	if err != nil {
 		return err
 	}

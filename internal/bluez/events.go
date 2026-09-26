@@ -1,6 +1,8 @@
 package bluez
 
 import (
+	"context"
+
 	"github.com/godbus/dbus/v5"
 )
 
@@ -108,7 +110,30 @@ func parsePropertiesChanged(s *dbus.Signal) (dbus.ObjectPath, string, map[string
 	return s.Path, iface, changed, true
 }
 
-func (c *Client) translate(s *dbus.Signal) (Event, bool) {
+// devicePropsOfInterest are the Device1 properties that can change whether a
+// device matches a signature. Anything else (RSSI, TxPower, ...) is noise
+// and never justifies a full-property fetch.
+var devicePropsOfInterest = map[string]bool{
+	"Address":          true,
+	"Name":             true,
+	"Alias":            true,
+	"Connected":        true,
+	"UUIDs":            true,
+	"ManufacturerData": true,
+	"ServiceData":      true,
+}
+
+// propsOverlap reports whether any changed property can affect matching.
+func propsOverlap(changed map[string]dbus.Variant) bool {
+	for k := range changed {
+		if devicePropsOfInterest[k] {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *Client) translate(ctx context.Context, s *dbus.Signal) (Event, bool) {
 	if s == nil {
 		return Event{}, false
 	}
@@ -118,13 +143,18 @@ func (c *Client) translate(s *dbus.Signal) (Event, bool) {
 	case ObjectManagerIface + ".InterfacesRemoved":
 		return parseInterfacesRemoved(s)
 	case PropsIface + ".PropertiesChanged":
-		path, iface, _, ok := parsePropertiesChanged(s)
+		path, iface, changed, ok := parsePropertiesChanged(s)
 		if !ok || iface != DeviceIface {
+			return Event{}, false
+		}
+		if !propsOverlap(changed) {
 			return Event{}, false
 		}
 		// PropertiesChanged carries only the delta; fetch the full set so the
 		// matcher always sees complete ManufacturerData/ServiceData.
-		snap, err := c.GetDevice(path)
+		callCtx, cancel := context.WithTimeout(ctx, getDeviceTimeout)
+		snap, err := c.GetDevice(callCtx, path)
+		cancel()
 		if err != nil {
 			return Event{}, false
 		}

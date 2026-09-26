@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/godbus/dbus/v5"
 )
@@ -14,6 +15,12 @@ const (
 	DeviceIface        = "org.bluez.Device1"
 	PropsIface         = "org.freedesktop.DBus.Properties"
 	ObjectManagerIface = "org.freedesktop.DBus.ObjectManager"
+)
+
+const (
+	// getDeviceTimeout bounds one full-property fetch inside the event
+	// translator, so a wedged bluetoothd cannot stall the pipeline forever.
+	getDeviceTimeout = 2 * time.Second
 )
 
 type DeviceSnapshot struct {
@@ -120,29 +127,35 @@ func (c *Client) Devices() ([]DeviceSnapshot, error) {
 }
 
 // Events streams added/changed/removed device events. The stop func releases
-// the subscription and closes the channel.
-func (c *Client) Events() (<-chan Event, func(), error) {
+// the subscription and closes the channel. ctx bounds the per-event device
+// property fetches done inside the translator.
+func (c *Client) Events(ctx context.Context) (<-chan Event, func(), error) {
 	sig := make(chan *dbus.Signal, 256)
 	c.conn.Signal(sig)
+
+	fail := func(err error) (<-chan Event, func(), error) {
+		c.conn.RemoveSignal(sig)
+		return nil, nil, err
+	}
 
 	if err := c.conn.AddMatchSignal(
 		dbus.WithMatchInterface(PropsIface),
 		dbus.WithMatchMember("PropertiesChanged"),
 		dbus.WithMatchArg(0, DeviceIface),
 	); err != nil {
-		return nil, nil, err
+		return fail(err)
 	}
 	if err := c.conn.AddMatchSignal(
 		dbus.WithMatchInterface(ObjectManagerIface),
 		dbus.WithMatchMember("InterfacesAdded"),
 	); err != nil {
-		return nil, nil, err
+		return fail(err)
 	}
 	if err := c.conn.AddMatchSignal(
 		dbus.WithMatchInterface(ObjectManagerIface),
 		dbus.WithMatchMember("InterfacesRemoved"),
 	); err != nil {
-		return nil, nil, err
+		return fail(err)
 	}
 
 	out := make(chan Event, 256)
@@ -158,7 +171,7 @@ func (c *Client) Events() (<-chan Event, func(), error) {
 				if !ok {
 					return
 				}
-				ev, ok := c.translate(s)
+				ev, ok := c.translate(ctx, s)
 				if !ok {
 					continue
 				}
@@ -192,10 +205,10 @@ func (c *Client) managedObjects() (map[dbus.ObjectPath]map[string]map[string]dbu
 }
 
 // GetDevice fetches the full current Device1 property set for one object path.
-func (c *Client) GetDevice(path dbus.ObjectPath) (DeviceSnapshot, error) {
+func (c *Client) GetDevice(ctx context.Context, path dbus.ObjectPath) (DeviceSnapshot, error) {
 	obj := c.conn.Object(Service, path)
 	var props map[string]dbus.Variant
-	if err := obj.Call(PropsIface+".GetAll", 0, DeviceIface).Store(&props); err != nil {
+	if err := obj.CallWithContext(ctx, PropsIface+".GetAll", 0, DeviceIface).Store(&props); err != nil {
 		return DeviceSnapshot{}, fmt.Errorf("get device %s: %w", path, err)
 	}
 	return snapshot(path, props), nil
