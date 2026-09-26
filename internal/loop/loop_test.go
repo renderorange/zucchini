@@ -18,20 +18,28 @@ import (
 // fakeBackend stands in for bluez.Client. It records Connect calls and never
 // touches D-Bus, so the loop's state machine can be exercised in isolation.
 type fakeBackend struct {
-	mu           sync.Mutex
-	connectCalls int
-	paths        []dbus.ObjectPath
-	err          error
-	block        chan struct{}
+	mu            sync.Mutex
+	connectCalls  int
+	discoverCalls int
+	paths         []dbus.ObjectPath
+	err           error
+	block         chan struct{}
+	events        chan bluez.Event
 }
 
-func (f *fakeBackend) StartDiscovery(dbus.ObjectPath) error { return nil }
-func (f *fakeBackend) StopDiscovery(dbus.ObjectPath) error  { return nil }
+func (f *fakeBackend) StartDiscovery(dbus.ObjectPath) error {
+	f.mu.Lock()
+	f.discoverCalls++
+	f.mu.Unlock()
+	return nil
+}
+
+func (f *fakeBackend) StopDiscovery(dbus.ObjectPath) error { return nil }
 
 func (f *fakeBackend) Devices() ([]bluez.DeviceSnapshot, error) { return nil, nil }
 
 func (f *fakeBackend) Events(ctx context.Context) (<-chan bluez.Event, func(), error) {
-	return make(chan bluez.Event), func() {}, nil
+	return f.events, func() {}, nil
 }
 
 func (f *fakeBackend) Connect(ctx context.Context, path dbus.ObjectPath) error {
@@ -55,6 +63,12 @@ func (f *fakeBackend) calls() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.connectCalls
+}
+
+func (f *fakeBackend) discovers() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.discoverCalls
 }
 
 func (f *fakeBackend) setBlock(ch chan struct{}) {
@@ -263,5 +277,86 @@ func TestObserveIsIdempotentForSamePath(t *testing.T) {
 	r.mu.Unlock()
 	if n != 1 {
 		t.Fatalf("targets = %d, want 1 after repeated observes", n)
+	}
+}
+
+func TestRunStopsOnBlueZGone(t *testing.T) {
+	b := &fakeBackend{err: context.DeadlineExceeded, events: make(chan bluez.Event)}
+	r := newTestRunner(t, b)
+
+	r.observe(context.Background(), matchingDevice("/org/bluez/hci0/dev_AA", false))
+
+	deadline := time.Now().Add(time.Second)
+	for b.calls() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("expected hammering before bluez loss")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- r.Run(context.Background(), "/org/bluez/hci0") }()
+
+	deadline = time.Now().Add(time.Second)
+	for b.discovers() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("expected Run to start discovery first")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	b.events <- bluez.Event{Type: bluez.EventBlueZGone}
+
+	select {
+	case err := <-errCh:
+		if err == nil {
+			t.Fatal("Run returned nil after bluez loss, want error")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Run did not return after bluez loss")
+	}
+
+	before := b.calls()
+	time.Sleep(30 * time.Millisecond)
+	if after := b.calls(); after != before {
+		t.Fatalf("connect calls grew after shutdown: %d -> %d", before, after)
+	}
+}
+
+func TestRunRearmsDiscoveryAfterStoppedEvent(t *testing.T) {
+	b := &fakeBackend{events: make(chan bluez.Event)}
+	r := newTestRunner(t, b)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- r.Run(ctx, "/org/bluez/hci0") }()
+
+	deadline := time.Now().Add(time.Second)
+	for b.discovers() < 1 {
+		if time.Now().After(deadline) {
+			t.Fatal("expected initial StartDiscovery from Run")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	b.events <- bluez.Event{Type: bluez.EventDiscoveryStopped}
+
+	deadline = time.Now().Add(time.Second)
+	for b.discovers() < 2 {
+		if time.Now().After(deadline) {
+			t.Fatal("expected discovery re-arm after stopped event")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	time.Sleep(40 * time.Millisecond)
+	if after := b.discovers(); after != 2 {
+		t.Fatalf("StartDiscovery calls = %d, want 2 (re-arm once, then stable)", after)
+	}
+
+	cancel()
+	if err := <-errCh; err != context.Canceled {
+		t.Fatalf("Run error = %v, want context.Canceled", err)
 	}
 }

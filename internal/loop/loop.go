@@ -2,6 +2,7 @@ package loop
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"sync"
 	"sync/atomic"
@@ -31,6 +32,9 @@ type Runner struct {
 	client  Backend
 	logger  *log.Logger
 	tick    time.Duration
+
+	discoveryDown   atomic.Bool
+	lastDiscoverLog atomic.Int64
 
 	mu      sync.Mutex
 	targets map[dbus.ObjectPath]*target
@@ -75,7 +79,9 @@ func (r *Runner) Run(ctx context.Context, adapter dbus.ObjectPath) error {
 	}
 	defer stop()
 
-	if existing, err := r.client.Devices(); err == nil {
+	if existing, err := r.client.Devices(); err != nil {
+		r.logger.Printf("seed devices: %v", err)
+	} else {
 		for _, d := range existing {
 			r.observe(ctx, d)
 		}
@@ -94,9 +100,27 @@ func (r *Runner) Run(ctx context.Context, adapter dbus.ObjectPath) error {
 				r.shutdown()
 				return nil
 			}
-			r.handle(ctx, ev)
+			switch ev.Type {
+			case bluez.EventBlueZGone:
+				r.shutdown()
+				return fmt.Errorf("%s disappeared from the system bus", bluez.Service)
+			case bluez.EventDiscoveryStopped:
+				if r.discoveryDown.CompareAndSwap(false, true) {
+					r.logger.Printf("discovery stopped on %s, rediscovering", adapter)
+				}
+			default:
+				r.handle(ctx, ev)
+			}
 		case <-ticker.C:
 			r.reap()
+			if r.discoveryDown.Load() {
+				if err := r.client.StartDiscovery(adapter); err != nil {
+					r.logDiscoveryFail(err)
+				} else {
+					r.discoveryDown.Store(false)
+					r.logger.Printf("discovery restored on %s", adapter)
+				}
+			}
 		}
 	}
 }
@@ -242,4 +266,18 @@ func (r *Runner) logFailure(t *target, err error) {
 		return
 	}
 	r.logger.Printf("connect failed: %s (%s): %v", t.address, t.sigName, err)
+}
+
+// logDiscoveryFail rate-limits re-arm failure lines to one per second, same
+// pattern as logFailure, so a broken adapter cannot fill the journal.
+func (r *Runner) logDiscoveryFail(err error) {
+	now := time.Now().UnixNano()
+	last := r.lastDiscoverLog.Load()
+	if now-last < int64(time.Second) {
+		return
+	}
+	if !r.lastDiscoverLog.CompareAndSwap(last, now) {
+		return
+	}
+	r.logger.Printf("restart discovery: %v", err)
 }
