@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -38,6 +39,10 @@ func Load(path string) (*Config, error) {
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&c); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
+	}
+	var extra json.RawMessage
+	if err := dec.Decode(&extra); err != io.EOF {
+		return nil, fmt.Errorf("parse %s: trailing data after top-level value", path)
 	}
 	c.applyDefaults()
 	if err := c.validate(); err != nil {
@@ -138,12 +143,18 @@ func parseHexUint16(s string) (uint16, error) {
 	return uint16(v), nil
 }
 
-// NormalizeUUID expands a 16-bit UUID to its 128-bit Bluetooth base form and lowercases it.
+// NormalizeUUID expands short UUIDs to their 128-bit Bluetooth base form,
+// dashes un-dashed full forms, and lowercases everything.
 func NormalizeUUID(s string) string {
 	t := strings.TrimSpace(strings.ToLower(s))
 	t = strings.TrimPrefix(t, "0x")
-	if len(t) == 4 {
+	switch len(t) {
+	case 4:
 		return "0000" + t + "-0000-1000-8000-00805f9b34fb"
+	case 8:
+		return t + "-0000-1000-8000-00805f9b34fb"
+	case 32:
+		return t[0:8] + "-" + t[8:12] + "-" + t[12:16] + "-" + t[16:20] + "-" + t[20:32]
 	}
 	return t
 }

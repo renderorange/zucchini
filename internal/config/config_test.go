@@ -60,6 +60,13 @@ func TestLoadRejectsBadJSON(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsTrailingData(t *testing.T) {
+	p := writeFile(t, `{"signatures":[{"name":"meta","company_ids":["0x0D53"]}]} {"workers": 999}`)
+	if _, err := Load(p); err == nil {
+		t.Fatal("expected error for trailing data after top-level value")
+	}
+}
+
 func TestDurations(t *testing.T) {
 	c := &Config{GraceSeconds: 3, CallTimeoutMs: 250, AttemptGapMs: 20}
 	if c.Grace() != 3*time.Second {
@@ -102,6 +109,8 @@ func TestNormalizeUUID(t *testing.T) {
 	cases := map[string]string{
 		"0xFD5F":                               "0000fd5f-0000-1000-8000-00805f9b34fb",
 		"FD5F":                                 "0000fd5f-0000-1000-8000-00805f9b34fb",
+		"ABCD1234":                             "abcd1234-0000-1000-8000-00805f9b34fb",
+		"0000fd5f00001000800000805f9b34fb":     "0000fd5f-0000-1000-8000-00805f9b34fb",
 		"0000FD5F-0000-1000-8000-00805F9B34FB": "0000fd5f-0000-1000-8000-00805f9b34fb",
 	}
 	for in, want := range cases {
