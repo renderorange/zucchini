@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -33,7 +34,9 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 	var c Config
-	if err := json.Unmarshal(b, &c); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&c); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
 	c.applyDefaults()
@@ -61,9 +64,30 @@ func (c *Config) applyDefaults() {
 	}
 }
 
+// Caps keep one bad config value from turning the daemon into a fork bomb or
+// pinning workers for hours. Values are validated after defaults are applied.
+const (
+	maxWorkers       = 16
+	maxGraceSeconds  = 3600
+	maxCallTimeoutMs = 60000
+	maxAttemptGapMs  = 60000
+)
+
 func (c *Config) validate() error {
 	if len(c.Signatures) == 0 {
 		return fmt.Errorf("at least one signature is required")
+	}
+	if c.Workers > maxWorkers {
+		return fmt.Errorf("workers %d exceeds maximum %d", c.Workers, maxWorkers)
+	}
+	if c.GraceSeconds > maxGraceSeconds {
+		return fmt.Errorf("grace_seconds %d exceeds maximum %d", c.GraceSeconds, maxGraceSeconds)
+	}
+	if c.CallTimeoutMs > maxCallTimeoutMs {
+		return fmt.Errorf("call_timeout_ms %d exceeds maximum %d", c.CallTimeoutMs, maxCallTimeoutMs)
+	}
+	if c.AttemptGapMs > maxAttemptGapMs {
+		return fmt.Errorf("attempt_gap_ms %d exceeds maximum %d", c.AttemptGapMs, maxAttemptGapMs)
 	}
 	for i, s := range c.Signatures {
 		if s.Name == "" {

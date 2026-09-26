@@ -110,3 +110,35 @@ func TestNormalizeUUID(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadRejectsUnknownFields(t *testing.T) {
+	p := writeFile(t, `{"grace_second": 5, "signatures":[{"name":"meta","company_ids":["0x0D53"]}]}`)
+	if _, err := Load(p); err == nil {
+		t.Fatal("expected error for unknown field, got none")
+	}
+}
+
+func TestLoadRejectsExcessiveWorkers(t *testing.T) {
+	p := writeFile(t, `{"workers": 1000000, "signatures":[{"name":"meta","company_ids":["0x0D53"]}]}`)
+	if _, err := Load(p); err == nil {
+		t.Fatal("expected error for workers above cap")
+	}
+}
+
+func TestLoadAcceptsAtCap(t *testing.T) {
+	p := writeFile(t, `{"workers": 16, "grace_seconds": 3600, "call_timeout_ms": 60000, "attempt_gap_ms": 60000, "signatures":[{"name":"meta","company_ids":["0x0D53"]}]}`)
+	c, err := Load(p)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.Workers != 16 {
+		t.Errorf("Workers = %d, want 16", c.Workers)
+	}
+}
+
+func TestLoadRejectsExcessiveGrace(t *testing.T) {
+	p := writeFile(t, `{"grace_seconds": 3601, "signatures":[{"name":"meta","company_ids":["0x0D53"]}]}`)
+	if _, err := Load(p); err == nil {
+		t.Fatal("expected error for grace_seconds above cap")
+	}
+}
