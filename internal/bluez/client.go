@@ -21,6 +21,11 @@ const (
 	// getDeviceTimeout bounds one full-property fetch inside the event
 	// translator, so a wedged bluetoothd cannot stall the pipeline forever.
 	getDeviceTimeout = 2 * time.Second
+
+	// opTimeout bounds one-shot BlueZ calls made outside the event pipeline
+	// (discovery control, GetManagedObjects). Exceeding it surfaces an error
+	// that main turns into exit 1, so systemd restarts the daemon.
+	opTimeout = 3 * time.Second
 )
 
 type DeviceSnapshot struct {
@@ -84,10 +89,12 @@ func (c *Client) StartDiscovery(adapter dbus.ObjectPath) error {
 		"Transport":     dbus.MakeVariant("auto"),
 		"DuplicateData": dbus.MakeVariant(true),
 	}
-	if err := obj.Call(AdapterIface+".SetDiscoveryFilter", 0, filter).Err; err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), opTimeout)
+	defer cancel()
+	if err := obj.CallWithContext(ctx, AdapterIface+".SetDiscoveryFilter", 0, filter).Err; err != nil {
 		return fmt.Errorf("set discovery filter: %w", err)
 	}
-	if err := obj.Call(AdapterIface+".StartDiscovery", 0).Err; err != nil {
+	if err := obj.CallWithContext(ctx, AdapterIface+".StartDiscovery", 0).Err; err != nil {
 		return fmt.Errorf("start discovery: %w", err)
 	}
 	return nil
@@ -95,7 +102,9 @@ func (c *Client) StartDiscovery(adapter dbus.ObjectPath) error {
 
 func (c *Client) StopDiscovery(adapter dbus.ObjectPath) error {
 	obj := c.conn.Object(Service, adapter)
-	return obj.Call(AdapterIface+".StopDiscovery", 0).Err
+	ctx, cancel := context.WithTimeout(context.Background(), opTimeout)
+	defer cancel()
+	return obj.CallWithContext(ctx, AdapterIface+".StopDiscovery", 0).Err
 }
 
 // Connect issues a BlueZ Device1.Connect. The call blocks until BlueZ answers
@@ -197,8 +206,10 @@ func (c *Client) Events(ctx context.Context) (<-chan Event, func(), error) {
 
 func (c *Client) managedObjects() (map[dbus.ObjectPath]map[string]map[string]dbus.Variant, error) {
 	obj := c.conn.Object(Service, "/")
+	ctx, cancel := context.WithTimeout(context.Background(), opTimeout)
+	defer cancel()
 	var managed map[dbus.ObjectPath]map[string]map[string]dbus.Variant
-	if err := obj.Call(ObjectManagerIface+".GetManagedObjects", 0).Store(&managed); err != nil {
+	if err := obj.CallWithContext(ctx, ObjectManagerIface+".GetManagedObjects", 0).Store(&managed); err != nil {
 		return nil, fmt.Errorf("get managed objects: %w", err)
 	}
 	return managed, nil
