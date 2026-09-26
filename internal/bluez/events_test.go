@@ -3,6 +3,7 @@ package bluez
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/godbus/dbus/v5"
@@ -438,4 +439,68 @@ func TestEventMatchRulesIncludeAdapterPropertiesChanged(t *testing.T) {
 		}
 	}
 	t.Fatalf("Adapter1 PropertiesChanged rule missing from eventMatchRules")
+}
+
+func TestChooseAdapterExactBasename(t *testing.T) {
+	byBase := map[string]dbus.ObjectPath{
+		"hci0":  "/org/bluez/hci0",
+		"hci10": "/org/bluez/hci10",
+	}
+
+	if got, err := chooseAdapter("hci0", byBase); err != nil || got != "/org/bluez/hci0" {
+		t.Fatalf("chooseAdapter hci0 = %q, %v; want /org/bluez/hci0, nil", got, err)
+	}
+	if got, err := chooseAdapter("hci10", byBase); err != nil || got != "/org/bluez/hci10" {
+		t.Fatalf("chooseAdapter hci10 = %q, %v; want /org/bluez/hci10, nil", got, err)
+	}
+	if _, err := chooseAdapter("ci10", byBase); err == nil {
+		t.Fatal("substring name ci10 must not match hci10")
+	}
+	if _, err := chooseAdapter("HCI0", byBase); err == nil {
+		t.Fatal("case-mismatched name must not match")
+	}
+	if _, err := chooseAdapter("hci1", byBase); err == nil {
+		t.Fatal("hci1 is not hci10, must not match")
+	}
+}
+
+func TestChooseAdapterEmptyNameIsDeterministic(t *testing.T) {
+	byBase := map[string]dbus.ObjectPath{
+		"hci10": "/org/bluez/hci10",
+		"hci0":  "/org/bluez/hci0",
+	}
+	for i := 0; i < 5; i++ {
+		got, err := chooseAdapter("", byBase)
+		if err != nil {
+			t.Fatalf("chooseAdapter empty: %v", err)
+		}
+		if got != "/org/bluez/hci0" {
+			t.Fatalf("chooseAdapter empty = %q, want /org/bluez/hci0 (sorted first)", got)
+		}
+	}
+}
+
+func TestChooseAdapterErrorListsCandidates(t *testing.T) {
+	byBase := map[string]dbus.ObjectPath{"hci0": "/org/bluez/hci0", "hci1": "/org/bluez/hci1"}
+	_, err := chooseAdapter("hci9", byBase)
+	if err == nil {
+		t.Fatal("expected error for unknown adapter")
+	}
+	if !strings.Contains(err.Error(), "hci0") || !strings.Contains(err.Error(), "hci1") {
+		t.Fatalf("error %q should list available adapters", err)
+	}
+}
+
+func TestAdapterPathsFiltersToAdapters(t *testing.T) {
+	managed := map[dbus.ObjectPath]map[string]map[string]dbus.Variant{
+		"/org/bluez/hci0":      {AdapterIface: {}},
+		"/org/bluez/hci0/dev2": {DeviceIface: {}},
+	}
+	byBase := adapterPaths(managed)
+	if len(byBase) != 1 {
+		t.Fatalf("adapterPaths returned %d entries, want 1 (devices excluded)", len(byBase))
+	}
+	if _, ok := byBase["hci0"]; !ok {
+		t.Fatalf("adapterPaths missing hci0, got %v", byBase)
+	}
 }

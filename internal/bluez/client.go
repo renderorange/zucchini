@@ -3,6 +3,7 @@ package bluez
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -76,14 +77,52 @@ func (c *Client) AdapterPath(name string) (dbus.ObjectPath, error) {
 	if err != nil {
 		return "", err
 	}
+	return chooseAdapter(name, adapterPaths(managed))
+}
+
+// adapterPaths maps each adapter's exact basename to its object path.
+// Device objects are filtered out here.
+func adapterPaths(managed map[dbus.ObjectPath]map[string]map[string]dbus.Variant) map[string]dbus.ObjectPath {
+	byBase := map[string]dbus.ObjectPath{}
 	for path, ifaces := range managed {
-		if _, ok := ifaces[AdapterIface]; ok {
-			if name == "" || strings.HasSuffix(string(path), name) {
-				return path, nil
-			}
+		if _, ok := ifaces[AdapterIface]; !ok {
+			continue
 		}
+		base := string(path)
+		if i := strings.LastIndex(base, "/"); i >= 0 {
+			base = base[i+1:]
+		}
+		byBase[base] = path
 	}
-	return "", fmt.Errorf("adapter %q not found", name)
+	return byBase
+}
+
+// chooseAdapter picks by exact, case-sensitive basename. An empty name picks
+// the first adapter in sorted basename order, so the choice is deterministic
+// even with several adapters present.
+func chooseAdapter(name string, byBase map[string]dbus.ObjectPath) (dbus.ObjectPath, error) {
+	if name != "" {
+		if path, ok := byBase[name]; ok {
+			return path, nil
+		}
+	} else if len(byBase) > 0 {
+		bases := make([]string, 0, len(byBase))
+		for base := range byBase {
+			bases = append(bases, base)
+		}
+		sort.Strings(bases)
+		return byBase[bases[0]], nil
+	}
+
+	bases := make([]string, 0, len(byBase))
+	for base := range byBase {
+		bases = append(bases, base)
+	}
+	sort.Strings(bases)
+	if name == "" {
+		return "", fmt.Errorf("no bluetooth adapters found")
+	}
+	return "", fmt.Errorf("adapter %q not found (available: %s)", name, strings.Join(bases, ", "))
 }
 
 func (c *Client) StartDiscovery(adapter dbus.ObjectPath) error {
