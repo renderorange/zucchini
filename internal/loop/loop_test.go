@@ -360,3 +360,31 @@ func TestRunRearmsDiscoveryAfterStoppedEvent(t *testing.T) {
 		t.Fatalf("Run error = %v, want context.Canceled", err)
 	}
 }
+
+func TestSuccessfulConnectMarksConnectedAndIdles(t *testing.T) {
+	// err == nil: Connect succeeds, so workers must quiesce without waiting
+	// for a Connected event. Both workers are held inside Connect until each
+	// has dialled, so the first success cannot quiesce the second one before
+	// it ever tries; that is the race the assertion "exactly 2" depends on.
+	b := &fakeBackend{}
+	release := make(chan struct{})
+	b.setBlock(release)
+	r := newTestRunner(t, b)
+	defer r.shutdown()
+
+	r.observe(context.Background(), matchingDevice("/org/bluez/hci0/dev_AA", false))
+
+	deadline := time.Now().Add(time.Second)
+	for b.calls() < 2 {
+		if time.Now().After(deadline) {
+			t.Fatalf("connect calls = %d, want 2 before idling", b.calls())
+		}
+		time.Sleep(time.Millisecond)
+	}
+	close(release)
+
+	time.Sleep(50 * time.Millisecond)
+	if after := b.calls(); after != 2 {
+		t.Fatalf("connect calls = %d after success, want 2 stable", after)
+	}
+}

@@ -223,35 +223,45 @@ func (r *Runner) shutdown() {
 	}
 }
 
-// hammer issues Connect calls back-to-back with no backoff until ctx is cancelled.
-// When the device reports Connected, workers idle rather than hammering a live link.
+// hammer issues Connect calls back-to-back with no backoff until ctx is
+// cancelled. A successful Connect marks the device connected, which idles the
+// worker; the observation loop clears the flag when the link drops.
 func (r *Runner) hammer(ctx context.Context, t *target) {
 	defer t.wg.Done()
 	for {
 		if ctx.Err() != nil {
 			return
 		}
-		if t.connected.Load() {
+		if !t.connected.Load() {
+			callCtx, cancel := context.WithTimeout(ctx, r.cfg.CallTimeout())
+			err := r.client.Connect(callCtx, t.path)
+			cancel()
+			if err == nil {
+				t.connected.Store(true)
+			} else if ctx.Err() == nil {
+				r.logFailure(t, err)
+			}
+
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(200 * time.Millisecond):
+			case <-time.After(r.cfg.AttemptGap()):
 			}
 			continue
 		}
 
-		callCtx, cancel := context.WithTimeout(ctx, r.cfg.CallTimeout())
-		err := r.client.Connect(callCtx, t.path)
-		cancel()
-		if err != nil && ctx.Err() == nil {
-			r.logFailure(t, err)
+		// Idle on the live link: one ticker per idle episode instead of a
+		// timer allocation per poll.
+		idle := time.NewTicker(200 * time.Millisecond)
+		for t.connected.Load() {
+			select {
+			case <-ctx.Done():
+				idle.Stop()
+				return
+			case <-idle.C:
+			}
 		}
-
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(r.cfg.AttemptGap()):
-		}
+		idle.Stop()
 	}
 }
 

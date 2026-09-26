@@ -117,11 +117,6 @@ func (c *Client) Connect(ctx context.Context, path dbus.ObjectPath) error {
 	return obj.CallWithContext(ctx, DeviceIface+".Connect", 0).Err
 }
 
-func (c *Client) Disconnect(path dbus.ObjectPath) error {
-	obj := c.conn.Object(Service, path)
-	return obj.Call(DeviceIface+".Disconnect", 0).Err
-}
-
 func (c *Client) Devices() ([]DeviceSnapshot, error) {
 	managed, err := c.managedObjects()
 	if err != nil {
